@@ -10,3 +10,6 @@ scikit-learn
 streamlit
 wordcloud
 matplotlib
+python-dotenv
+openai
+altair==4.2.2
