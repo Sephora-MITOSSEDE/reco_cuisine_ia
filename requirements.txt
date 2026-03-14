@@ -7,7 +7,7 @@ numpy<2.0.0
 pyarrow
 spacy
 scikit-learn
-streamlit
+streamlit>=1.30.0
 wordcloud
 matplotlib
 python-dotenv
