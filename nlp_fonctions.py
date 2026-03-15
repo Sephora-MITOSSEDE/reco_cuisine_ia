@@ -1291,6 +1291,8 @@ def culinary_chatbot_step2(recommendations, choice):
 # Fonction de chargement des données pour l'application
 # ============================
 
+
+
 def load_models():
     BASE_DIR = Path(__file__).parent
     MODELS_DIR = BASE_DIR / "models"

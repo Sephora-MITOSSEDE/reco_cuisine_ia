@@ -18,6 +18,12 @@ if "selected_recipe" not in st.session_state:
 if "recipe_source" not in st.session_state:
     st.session_state["recipe_source"] = 1 # Par défaut, on revient sur l'onglet 1
 
+
+# --- INITIALISATION MÉMOIRE RECHERCHE ---
+if "search_query" not in st.session_state:
+    st.session_state["search_query"] = ""
+
+
 # =========================
 # CONFIG
 # =========================
@@ -33,16 +39,24 @@ st.markdown('<style>div[data-testid="stAppViewContainer"]{color-scheme: light !i
 # =========================
 # CHARGEMENT DES DONNÉES
 # =========================
-# 1. INITIALISATION (C'est ici !)
+# 1. INITIALISATION 
 # On prépare la mémoire de l'app avant de charger quoi que ce soit
 if "selected_cluster_filter" not in st.session_state:
     st.session_state["selected_cluster_filter"] = []
 
 
-df, df_chatbot, VOCAB_INGREDIENTS, tfidf_both, vec_both = load_models()
+# Dans nlp_fonctions.py (recommandé) ou autour de votre import
+@st.cache_resource
+def get_cached_models():
+    # Cette fonction ne s'exécutera qu'UNE SEULE FOIS pour tous les utilisateurs
+    return load_models()
+
+# Remplacez votre ligne actuelle par :
+df, df_chatbot, VOCAB_INGREDIENTS, tfidf_both, vec_both = get_cached_models()
+
 
 # =========================
-# CSS — VERSION PROCHE KITCHENAID
+# CSS
 # =========================
 st.markdown(
     """
@@ -134,7 +148,7 @@ st.markdown(
     }
 
     /* 4. STYLE DES ONGLET "PILULE" (Le cœur du design) */
-    /* 4. STYLE DES ONGLET "PILULE" */
+   
     div[data-testid="stRadio"] label {
         background-color: #f1f1f1 !important;
         border: 1px solid #e1e1e1 !important;
@@ -162,13 +176,13 @@ st.markdown(
         padding: 0 !important;
         
         /* LES LIGNES CLÉS ICI : */
-        white-space: nowrap !important; /* Interdit le retour à la ligne */
-        overflow: visible !important;   /* Laisse le texte étirer la pilule */
+        white-space: nowrap !important; 
+        overflow: visible !important;   
         display: block !important;
     }
     /* 5. STYLE DU TEXTE (Noir & Centré) */
     div[data-testid="stRadio"] label p {
-        color: #1d1d1d !important; /* Noir KitchenAid */
+        color: #1d1d1d !important; 
         font-weight: 700 !important;
         font-size: 0.95rem !important;
         margin: 0 !important;
@@ -177,7 +191,7 @@ st.markdown(
 
     /* 6. L'ONGLET ACTIF : Pilule Rouge */
     div[data-testid="stRadio"] div[data-checked="true"] {
-        background-color: #c8102e !important; /* Rouge KitchenAid */
+        background-color: #c8102e !important; 
         border-color: #c8102e !important;
         box-shadow: 0 4px 6px rgba(200, 16, 46, 0.2) !important; /* Petite ombre rouge */
     }
@@ -582,7 +596,7 @@ clusters_home = [
 # =========================
 # NAVIGATION (STYLE TABS)
 # =========================
-menu_options = ["Accueil", "Recommandation", "Assistant Gourmi", "Communauté"]
+menu_options = ["Accueil", "Recommandations", "Assistant Gourmi", "Communauté"]
 
 # On crée une structure de colonnes pour centrer les boutons
 # Les [2, 1, 1, 1, 1, 2] servent de marges à gauche et à droite
@@ -594,9 +608,22 @@ with c1:
         st.session_state["active_tab"] = 0
         st.rerun()
 with c2:
-    if st.button("Recommandation", use_container_width=True, key="nav_1"):
+    if st.button("Recommandations", use_container_width=True, key="nav_1"):
         st.session_state["active_tab"] = 1
+        st.session_state["selected_recipe"] = None
+        
+        # --- SOLUTION : RESET DES CLÉS DES WIDGETS ---
+        st.session_state["search_query"] = "" 
+        st.session_state["selected_cluster_filter"] = []
+        
+        # On vide aussi les clés internes des widgets s'ils existent
+        if "search_input_widget" in st.session_state:
+            st.session_state["search_input_widget"] = ""
+        if "cluster_widget" in st.session_state:
+            st.session_state["cluster_widget"] = []
+            
         st.rerun()
+        
 with c3:
     if st.button("Assistant Gourmi", use_container_width=True, key="nav_2"):
         st.session_state["active_tab"] = 2
@@ -838,9 +865,16 @@ elif st.session_state["active_tab"] == 1:
             label_retour = "← Retour aux recommandations"
 
         if st.button(label_retour):
-            source_page = st.session_state.get("recipe_source", 1)
-            st.session_state["selected_recipe"] = None  # On ferme la fiche
-            st.session_state["active_tab"] = source_page # On redirige vers l'onglet d'origine
+            # 1. On enlève la recette sélectionnée pour revenir à la liste
+            st.session_state["selected_recipe"] = None  
+            
+            # 2. On change d'onglet si on vient de l'assistant, sinon on reste sur le 1
+            if st.session_state.get("recipe_source") == 2:
+                st.session_state["active_tab"] = 2
+            else:
+                st.session_state["active_tab"] = 1 
+                
+            # SURTOUT : Ne pas faire st.session_state["search_query"] = "" ici !
             st.rerun()
 
         # Design Header
@@ -935,12 +969,31 @@ elif st.session_state["active_tab"] == 1:
         df_chatbot['temps_total'] = pd.to_numeric(df_chatbot['temps_total'], errors='coerce').fillna(0)
 
         # BARRE RECHERCHE & FILTRES
+        
         left, center, right = st.columns([1, 6, 1])
         with center:
-            search = st.text_input("", placeholder="🔎 Rechercher une recette ou un ingrédient")
+            # On ajoute key="search_query" pour que le texte reste en mémoire lors du "Retour"
+            current_search = st.session_state.get("search_query", "")
+
+            # 2. On affiche l'input en utilisant une clé différente pour le widget
+            search = st.text_input(
+                "Recherche", 
+                value=current_search, 
+                placeholder="Rechercher une recette ou un ingrédient", 
+                key="search_input_widget" 
+            )
+            # On met à jour manuellement le state pour la prochaine fois
+            st.session_state["search_query"] = search
+
             f1, f2, f3, f4 = st.columns(4)
             with f1:
-                sel_clusters = st.multiselect("Catégories", options=sorted(df_chatbot['cluster_name'].unique().tolist()), key="selected_cluster_filter")
+                sel_clusters = st.multiselect(
+                    "Catégories", 
+                    options=sorted(df_chatbot['cluster_name'].unique().tolist()), 
+                    default=st.session_state.get("selected_cluster_filter", []), # Utilise default
+                    key="cluster_widget"
+                )
+                st.session_state["selected_cluster_filter"] = sel_clusters
             with f2:
                 sel_diff = st.selectbox("Difficulté", options=["Toutes"] + sorted([str(x) for x in df_chatbot['difficulte'].dropna().unique()]))
             with f3:
@@ -1013,8 +1066,7 @@ elif st.session_state["active_tab"] == 1:
                         for idx_r, (_, row) in enumerate(batch.iterrows()):
                             
                             with cols[idx_r]:
-                                # 1. On fixe une hauteur plus grande (110px) et on cache le surplus de texte s'il y en a trop
-                                # pour éviter que le titre ne pousse le bouton.
+                                
                                 st.markdown(f"""
                                     <div class="recipe-card">
                                         <img class="recipe-image" src="{row['image']}">
@@ -1048,7 +1100,7 @@ elif st.session_state["active_tab"] == 2:
     import re
     from nlp_fonctions import agent_gourmi_master, culinary_chatbot_step2, reset_gourmi
 
-    # --- STYLE CSS (LE SEUL QUI SÉPARE RÉELLEMENT LES DEUX) ---
+    # --- STYLE CSS ---
     st.markdown("""
         <style>
         /* 1. CONTENEUR GLOBAL POUR L'ALIGNEMENT */
@@ -1204,7 +1256,7 @@ elif st.session_state["active_tab"] == 2:
             unsafe_allow_html=True
         )
     
-    # On retire le st.markdown("---") car le bordereau fait déjà la séparation
+   
 
         # INITIALISATION DANS L'ONGLET 2
         if "messages" not in st.session_state:
@@ -1223,7 +1275,7 @@ elif st.session_state["active_tab"] == 2:
             with st.chat_message(message["role"]):
                 
                 # On récupère 'clean_content' s'il existe, sinon on prend le 'content' brut
-                # Cela évite de répéter st.markdown() dans un if/else
+                
                 texte_a_afficher = message.get("clean_content", message["content"])
                 st.markdown(texte_a_afficher)
 
@@ -1232,7 +1284,7 @@ elif st.session_state["active_tab"] == 2:
                 if url_image:
                     st.image(url_image, use_container_width=True)
 
-                # --- LE BOUTON DE FICHE (Crucial pour ton bug) ---
+                # --- LE BOUTON DE FICHE ---
                 # On vérifie si les données de la recette sont stockées dans ce message
                 if "recipe_data" in message:
                     # On crée un bouton unique pour chaque message grâce à l'index i
@@ -1291,8 +1343,7 @@ elif st.session_state["active_tab"] == 2:
             st.rerun()
 
         # --- ÉTAPE 5 : LE BOUTON DISCRET (TOUT EN BAS) ---
-        st.write("") # Un petit espace
-        # On utilise une petite colonne ou un alignement simple
+        st.write("") 
         _, btn_col, _ = st.columns([2, 1, 2]) 
         with btn_col:
             if st.button("🗑️ Reset", use_container_width=True, help="Effacer la discussion"):
@@ -1533,4 +1584,4 @@ elif st.session_state["active_tab"] == 3:
                                 post['comments'] = []
                             post['comments'].append({"author": c_user, "text": c_text})
                             st.rerun()
-            # ========================================================
+  
